@@ -36,7 +36,7 @@ optional arguments:
                         (default: 0)
   --nlayers NLAYERS     Number of reader layers (default: 3)
   --dataset DATASET     Location of training, test and validation files.
-                        (default: lambada)
+                        (default: wikihop)
   --seed SEED           Seed for different experiments with same settings
                         (default: 1)
   --save_path SAVE_PATH

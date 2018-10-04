@@ -78,34 +78,55 @@ class GRU(object):
             outs = tf.reverse(outs, [1])
         return outs
 
-class MageRNN(object):
-    """
-    MAGE RNN model which takes as input five tensors:
-    X: B x N x Din (batch of sequences)
-    M: B x N (masks for sequences)
-    Ei: B x N x C (one-hot mask for incoming edges at each timestep)
-    Eo: B x N x C (one-hot mask for outgoing edges at each timestep)
-    Ri: B x N x C (index for incoming relation types at each timestep)
-    Ro: B x N x C (index for outgoing relation types at each timestep)
-    Q: B x Dout (optionally, query vectors for modulating relation attention)
-    C is the maximum number of chains.
-    Indexes in Ri/o go from 0 to M-1, where M is the number of relation types
+class CorefGRU(object):
+    """Coref-GRU model which uses coreference to update hidden states of a GRU.
 
-    During each recurrent update, the relevant hidden states are fetched from the memory
-    based on R/E, and combined through an attention mechanism. Multiple edges of the same type
-    are averaged together.
+    This class is designed to work with any Directed Acyclic Graph (DAG) of
+    annotations over the input sequence, and output a sequence of vectors as the
+    output. Full details of this layer are described in the following paper:
 
-    During construction provide the parameters for initializing the variables.
-        "num_relations" :   total number of relations,
-        "input_dim"     :   input dimensionality
-        "relation_dim"  :   output dimensionality for each relation type,
-        "max_chains"    :   maximum number of chains
-        "reverse"       :   set to true to process the sequence in reverse
-        "concat"        :   set to true to concatenate relations instead of attention
+    ```
+    Linguistic Knowledge as Memory for Recurrent Neural Networks
+    Bhuwan Dhingra, Zhilin Yang, William W. Cohen, Ruslan Salakhutdinov
+    https://arxiv.org/pdf/1703.02620.pdf
+    ```
 
-    compute() takes the three placeholders for the tensors described above, and optionally the
-    initializer for the recurrence, and outputs
-    another placeholder for the output of the layer.
+    As a special case the DAG might only consist of coreference annotations as
+    described in the paper:
+
+    ```
+    Neural Models for Reasoning over Multiple Mentions using Coreference
+    Bhuwan Dhingra, Qiao Jin, Zhilin Yang, William W. Cohen, Ruslan Salakhutdinov
+    NAACL, 2018
+    http://aclweb.org/anthology/N18-2007
+    ```
+
+    In this repository we only use this class with coreferences.
+
+    To use this layer, first initialize the model and then call compute with the
+    input tensors:
+
+    ```
+    cgru = CorefGRU(num_relations, indim, relationdim, max_chains, reverse=False)
+    out, mem, agg = cgru.compute(inp, mask, edgein, edgeout, relin, relout)
+    ```
+
+    See `compute()` for more details about the inputs to that function.
+
+    Args:
+        num_relations: Number of distinct relations in the DAG, including the
+            sequential next-word relation. For coreference, this will be 2.
+        input_dim: Dimensionality of input.
+        relation_dim: Hidden state size per relation. The actual output size of
+            this layer will be `num_relations * relation_dim`.
+        max_chains: Number of linear chains the DAG is decomposed into. For
+            coreference, we assume each chain corresponds to one entity cluster,
+            hence this is equal to the maximum number of clusters in any input,
+            plus one for the sequential relationship.
+        reverse: (Optional) If true processes the sequence in backwards. This
+            is used for bidirectional models.
+        concat: (Deprecated) If true concatenates the incoming hidden states
+            instead of an attention mechanism.
     """
 
     def __init__(self, num_relations, input_dim, relation_dim, max_chains, 
@@ -151,6 +172,52 @@ class MageRNN(object):
                                  dtype=tf.float32)
 
     def compute(self, X, M, Ei, Eo, Ri, Ro, init=None, mem_init=None):
+        """Apply Coref-GRU layer to the given tensors.
+
+        The input DAG is parameterized using four tensors described below.
+
+        Assume that B is the batch size, N is the max sequence length, Din is
+        the size of input embeddings, Dout is the size of the output embeddings,
+        Drel is the size of embedding for each relation, and C is the maximum
+        number of chains in the DAG.
+
+        Args:
+            X: Input batch of sequences of size B x N x Din.
+            M: Mask over the input batch of sequences B x N.
+            Ei: One-hot mask which indicates which chains have an incoming edge
+                at each timestep. Size B x N x C. Each element is 0/1.
+            Eo: One-hot mask which indicates which chains have an outgoing edge
+                at each timestep. Size B x N x C. Each element is 0/1.
+            Ri: Index of the relations for the incoming edges in Ei. Goes from
+                0 to num_relations - 1. For positions where Ei=0, this can be
+                any value.
+            Ro: Index of the relations for the outgoing edges in Eo. Goes from
+                0 to num_relations - 1. For positions where Eo=0, this can be
+                any value.
+            init: Hidden state to initialize from.
+            mem_init: Memory state along each chain to initialize from.
+
+        Returns:
+            outs: B x N x Dout Tensor of output states at each timestep.
+            mems: B x C x Drel Tensor of hidden state along each chain.
+            aggs: B x N x num_relation Tensor of attention score over relations
+                at each timestep.
+
+        As an example with only coreference, suppose the input sequence is
+        "Mary loves her cat", where "Mary" and "her" belong to one coreference
+        chain and "cat" belongs to another coreference chain. In this case, we
+        have two relations, one for the sequental relationship between each pair
+        of adjacent words and one for coreference. We have 3 chains in the input
+        one for the sequential relationship and two for coreference. In this
+        case (assuming batch size = 1):
+
+        ```
+        Ei = [[[1, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1]]]  # 1 x 4 x 3
+        Ri = [[[0, 1, 0], [0, 0, 0], [0, 1, 0], [0, 0, 1]]]  # 1 x 4 x 3
+        Eo = [[[1, 1, 0], [1, 0, 0], [1, 1, 0], [1, 0, 1]]]  # 1 x 4 x 3
+        Ro = [[[0, 1, 0], [0, 0, 0], [0, 1, 0], [0, 0, 1]]]  # 1 x 4 x 3
+        ```
+        """
         # reshape for scan
         Xre = tf.transpose(X, perm=(1,0,2))
         Mre = tf.transpose(M, perm=(1,0))

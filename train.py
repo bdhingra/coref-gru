@@ -4,7 +4,7 @@ import os
 import cPickle as pkl
 import tensorflow as tf
 
-from model import GAMage
+from model import GA
 from utils import Helpers, DataPreprocessor, MiniBatchLoader
 
 def _add_summary(writer, scalar, tag, step):
@@ -43,7 +43,7 @@ def main(save_path, params, mode='train'):
 
     print("building network ...")
     W_init, embed_dim, = Helpers.load_word2vec_embeddings(data.dictionary[0], word2vec)
-    m = GAMage.Model(params, W_init, embed_dim)
+    m = GA.Model(params, W_init, embed_dim)
 
     print("training ...")
     num_iter = 0

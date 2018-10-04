@@ -84,13 +84,13 @@ class Model(object):
                     doc_emb = tf.concat([doc_emb, fea_emb], axis=2) # B x N x (De+2)
                     indoc += 2
                 # forward
-                fdoc = MageRNN(self.num_relations, indoc, self.relation_dims, 
+                fdoc = CorefGRU(self.num_relations, indoc, self.relation_dims, 
                         self.max_chains)
                 fdout, dmem, fdagg = fdoc.compute(doc_emb, self.dmask, self.docei, self.doceo, 
                         self.docri, self.docro) # B x N x Dh
                 # backward
                 # flip masks o<->i, mirror relation types
-                bdoc = MageRNN(self.num_relations, indoc, self.relation_dims, 
+                bdoc = CorefGRU(self.num_relations, indoc, self.relation_dims, 
                         self.max_chains, reverse=True)
                 bdout, dmem, bdagg = bdoc.compute(doc_emb, self.dmask, self.doceo, self.docei, 
                         self.docro, self.docri) # B x N x Dh
