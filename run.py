@@ -13,7 +13,7 @@ parser.add_argument('--mode', dest='mode', type=int, default=0,
                     help='run mode - (0-train only, 1-test only, 2-val only)')
 parser.add_argument('--nlayers', dest='nlayers', type=int, default=3,
                     help='Number of reader layers')
-parser.add_argument('--dataset', dest='dataset', type=str, default='wikihop',
+parser.add_argument('--dataset', dest='dataset', type=str, default='lambada',
                     help='Location of training, test and validation files.')
 parser.add_argument('--seed', dest='seed', type=int, default=1,
                     help='Seed for different experiments with same settings')

@@ -1,206 +1,171 @@
 import os
-import io
 import json
+from itertools import izip
 
-from collections import Counter, OrderedDict
+MAX_WORD_LEN = 10
 
 SYMB_BEGIN = "@begin"
 SYMB_END = "@end"
 
 class Data:
 
-    def __init__(self, dictionary, num_entities, training, validation, test,
-                 word_counts, max_doc_len=0, max_qry_len=0, max_num_cand=0):
+    def __init__(self, dictionary, num_entities, training, validation, test):
         self.dictionary = dictionary
         self.training = training
         self.validation = validation
         self.test = test
         self.vocab_size = len(dictionary[0])
-        self.num_chars = len(dictionary[1]) if dictionary[1] is not None else 0
+        self.num_chars = len(dictionary[1])
         self.num_entities = num_entities
         self.inv_dictionary = {v:k for k,v in dictionary[0].items()}
-        self.word_counts = word_counts
-        self.max_doc_len = max_doc_len
-        self.max_qry_len = max_qry_len
-        self.max_num_cand = max_num_cand
+        if training:
+            self.max_num_cand = max(map(lambda x:len(x[3]), 
+                training+validation+test))
+        else:
+            self.max_num_cand = max(map(lambda x:len(x[3]), 
+                validation+test))
 
 class DataPreprocessor:
 
-    def preprocess_rc(self, params, question_dir, dictionary=None):
+    def preprocess(self, question_dir, max_chains=100, 
+                   no_training_set=False, use_chars=True):
         """
         preprocess all data into a standalone Data object.
+        the training set will be left out (to save debugging time) when no_training_set
+        is True.
         """
-        if dictionary is None:
-            vocab_f = os.path.join(question_dir,"vocab.txt")
-            word_dictionary, char_dictionary, _ = \
-                    self.make_dictionary(question_dir, vocab_f, params)
-            dictionary = (word_dictionary, char_dictionary)
-
-        use_chars = params["char_dim"] > 0
-        print "preparing training data ..."
-        training = self.parse_json_file(question_dir + "/training.json",
-                                        dictionary, use_chars,
-                                        params["num_unknown_types"],
-                                        params["max_chains"],
-                                        params["max_word_len"],
-                                        params["max_doc_len"],
-                                        check_ans_in_doc=True)
+        vocab_f = os.path.join(question_dir,"vocab.txt")
+        word_dictionary, char_dictionary, num_entities = \
+                self.make_dictionary(question_dir, vocab_file=vocab_f)
+        dictionary = (word_dictionary, char_dictionary)
+        if no_training_set:
+            training = None
+        else:
+            print "preparing training data ..."
+            training = self.parse_all_files(question_dir + "/training", 
+                                            dictionary, use_chars, max_chains)
         print "preparing validation data ..."
-        validation = self.parse_json_file(question_dir + "/validation.json",
-                                          dictionary, use_chars,
-                                          params["num_unknown_types"],
-                                          params["max_chains"],
-                                          params["max_word_len"],
-                                          params["max_doc_len"])
+        validation = self.parse_all_files(question_dir + "/validation", 
+                                          dictionary, use_chars, max_chains)
+        print "preparing test data ..."
+        test = self.parse_all_files(question_dir + "/test", 
+                                    dictionary, use_chars, max_chains)
 
-        data = Data(dictionary, 0, training, validation, [], None)
+        data = Data(dictionary, num_entities, training, validation, test)
         return data
 
-    def make_dictionary(self, question_dir, vocab_file, params):
+    def make_dictionary(self, question_dir, vocab_file):
 
         if os.path.exists(vocab_file):
-            def _parse_line(line):
-                s, c = line.strip().split("\t")
-                return s, int(c)
             print "loading vocabularies from " + vocab_file + " ..."
-            vocabularies = map(lambda x:_parse_line(x),
-                               io.open(vocab_file, encoding="utf-8").readlines())
-            print "loading characters from " + vocab_file + ".chars ..."
-            characters = map(lambda x:_parse_line(x),
-                             io.open(vocab_file + ".chars", encoding="utf-8").readlines())
+            vocabularies = map(lambda x:x.strip(), open(vocab_file).readlines())
         else:
             print "no " + vocab_file + " found, constructing the vocabulary list ..."
 
-            vocab_counter = Counter()
-            char_counter = Counter()
+            vocab_set = set()
 
-            def _add_to_vocab(filename, vocab, chars):
-                for line in io.open(filename):
-                    data = json.loads(line.strip())
-                    for token in data["document"].split():
-                        vocab[token.lower()] += 1
-                        chars.update(list(token))
-                    query_toks = data["query"].split()
-                    vocab[query_toks[0].lower()] = 100 # to ensure this remains in vocab
-                    chars.update(list(query_toks[0]))
-                    for token in query_toks[1:]:
-                        vocab[token.lower()] += 1
-                        chars.update(list(token))
+            f = open(question_dir+'/training.data')
+            for line in f:
+                vocab_set |= set(line.rstrip().split())
+            f.close()
+            f = open(question_dir+'/validation.data')
+            for line in f:
+                vocab_set |= set(line.rstrip().split())
+            f.close()
+            f = open(question_dir+'/test.data')
+            for line in f:
+                vocab_set |= set(line.rstrip().split())
+            f.close()
 
-            print "reading json files ..."
-            _add_to_vocab(question_dir + "/training.json", vocab_counter, char_counter)
-
-            print "constructing vocabularies ..."
-            vocabularies = vocab_counter.most_common(params["vocab_size"] -
-                                                     params["num_unknown_types"])
-            vocabularies += [("__unkword%d__" % ii, 0)
-                             for ii in range(params["num_unknown_types"])]
-            characters = char_counter.most_common(params["num_characters"] - 1)
-            characters += [("__unkchar__", 0)]
+            vocab_set.add(SYMB_BEGIN)
+            vocab_set.add(SYMB_END)
+            vocabularies = list(vocab_set)
 
             print "writing vocabularies to " + vocab_file + " ..."
-            vocab_fp = io.open(vocab_file, "w", encoding="utf-8")
-            vocab_fp.write('\n'.join(["%s\t%d" % (w, c) for w, c in vocabularies]))
-            vocab_fp.close()
-            print "writing characters to " + vocab_file + ".chars ..."
-            vocab_fp = io.open(vocab_file + ".chars", "w", encoding="utf-8")
-            vocab_fp.write('\n'.join(["%s\t%d" % (ch, c) for ch, c in characters]))
+            vocab_fp = open(vocab_file, "w")
+            vocab_fp.write('\n'.join(vocabularies))
             vocab_fp.close()
 
-        word_dictionary = OrderedDict([(w[0], ii) for ii, w in enumerate(vocabularies)])
-        char_dictionary = OrderedDict([(w[0], ii) for ii, w in enumerate(characters)])
-        print "vocab_size = %d" % len(word_dictionary)
-        print "num characters = %d" % len(char_dictionary)
+        vocab_size = len(vocabularies)
+        word_dictionary = dict(zip(vocabularies, range(vocab_size)))
+        char_set = set([c for w in vocabularies for c in list(w)])
+        char_set.add(' ')
+        char_dictionary = dict(zip(list(char_set), range(len(char_set))))
+        num_entities = len([v for v in vocabularies if v.startswith('@entity')])
+        print "vocab_size = %d" % vocab_size
+        print "num characters = %d" % len(char_set)
+        print "%d anonymoused entities" % num_entities
+        print "%d other tokens (including @placeholder, %s and %s)" % (
+                vocab_size-num_entities, SYMB_BEGIN, SYMB_END)
 
-        return word_dictionary, char_dictionary, 0
+        return word_dictionary, char_dictionary, num_entities
 
     @staticmethod
-    def process_question(doc_raw, doc_lower, qry_raw, qry_lower, ans_raw, ans_lower,
-                         cand_raw, cand_lower, w_dict, c_dict, use_chars, fname,
-                         num_unks, max_word_len, wrapqry=True):
+    def process_question(doc_raw, qry_raw, ans_raw, cand_raw, w_dict, 
+            c_dict, use_chars, fname):
         # wrap the query with special symbols
-        if wrapqry:
-            qry_raw.insert(0, SYMB_BEGIN)
-            qry_raw.append(SYMB_END)
-
-        # find OOV tokens
-        oov = set()
-        def _add_to_oov(tokens):
-            for token in tokens:
-                if token not in w_dict: oov.add(token)
-        _add_to_oov(doc_lower)
-        _add_to_oov(qry_lower)
-        for cand in cand_lower: _add_to_oov(cand)
-        # assign unk embeddings to oov tokens
-        unk_dict = {}
-        for ii, token in enumerate(oov):
-            unk_dict[token] = w_dict[u"__unkword%d__" % (ii % num_unks)]
+        qry_raw.insert(0, SYMB_BEGIN)
+        qry_raw.append(SYMB_END)
+        try:
+            cloze = qry_raw.index('@placeholder')
+        except ValueError:
+            try:
+                at = qry_raw.index('@')
+                print '@placeholder not found in ', fname, '. Fixing...'
+                qry_raw = qry_raw[:at] + [''.join(qry_raw[at:at+2])] + qry_raw[at+2:]
+                cloze = qry_raw.index('@placeholder')
+            except ValueError:
+                cloze = -1
 
         # tokens/entities --> indexes
-        def _map_token(token):
-            if token in unk_dict: return unk_dict[token]
-            else: return w_dict[token]
-        doc_words = map(lambda w:_map_token(w), doc_lower)
-        qry_words = map(lambda w:_map_token(w), qry_lower)
-        ans = map(lambda w:_map_token(w), ans_lower)
-        cand = [map(lambda w:_map_token(w), c) for c in cand_lower]
-
-        # tokens --> character index lists
+        doc_words = map(lambda w:w_dict[w], doc_raw)
+        qry_words = map(lambda w:w_dict[w], qry_raw)
         if use_chars:
-            doc_chars = map(lambda w: map(lambda c:c_dict.get(c,c_dict[u"__unkchar__"]), 
-                list(w)[:max_word_len]), doc_raw)
-            qry_chars = map(lambda w: map(lambda c:c_dict.get(c,c_dict[u"__unkchar__"]), 
-                list(w)[:max_word_len]), qry_raw)
+            doc_chars = map(lambda w:map(lambda c:c_dict.get(c,c_dict[' ']), 
+                list(w)[:MAX_WORD_LEN]), doc_raw)
+            qry_chars = map(lambda w:map(lambda c:c_dict.get(c,c_dict[' ']), 
+                list(w)[:MAX_WORD_LEN]), qry_raw)
         else:
             doc_chars, qry_chars = [], []
+        ans = map(lambda w:w_dict.get(w,0), ans_raw.split())
+        cand = [map(lambda w:w_dict.get(w,0), c) for c in cand_raw]
 
-        return doc_words, qry_words, ans, cand, doc_chars, qry_chars
+        return doc_words, qry_words, ans, cand, doc_chars, qry_chars, cloze
 
-    def parse_json_file(self, filename, dictionary, use_chars, num_unks,
-                        max_chains, max_word_len, max_doc_len,
-                        check_ans_in_doc=False):
+    def parse_data_file(self, fdata, frels, dictionary, use_chars, stops, max_chains):
+        """
+        parse a *.data file into list of tuple(document, query, answer, filename)
+        """
         w_dict, c_dict = dictionary[0], dictionary[1]
         questions = []
-        max_qry_len, max_cands, max_ents = 0, 0, 0
-        with io.open(filename) as f:
-            for ni, line in enumerate(f):
-                # read
-                data = json.loads(line.rstrip())
-                doc_raw = data["document"].split()[:max_doc_len]
-                qry_raw = data["query"].split()
-                ans_raw = data["answer"].split()
-                cand_raw = data["candidates"]
-                annotations = data["annotations"]
-                ii = data["id"]
-                mentions = data["mentions"]
-                corefs = data["coref_onehot"][:max_chains-1]
+        with open(fdata) as data, open(frels) as rels:
+            for ii, (raw, chains) in enumerate(izip(data, rels)):
+                sents = raw.rstrip().rsplit(' . ', 1) # doc and query
+                doc_raw = sents[0].split()+['.'] # document
+                qry_tok = sents[1].rstrip().split()
+                qry_raw, ans_raw =  qry_tok[:-1], qry_tok[-1] # query and answer
+                cand_raw = filter(lambda x:x not in stops, set(doc_raw))
+                if ans_raw not in cand_raw: continue
+                cand_raw = [[cd] for cd in cand_raw]
 
-                # checks
-                assert ans_raw in cand_raw
-                doc_lower = [t.lower() for t in doc_raw]
-                qry_lower = [t.lower() for t in qry_raw]
-                ans_lower = [t.lower() for t in ans_raw]
-                cand_lower = [[t.lower() for t in cand] for cand in cand_raw]
-                if not any(aa in doc_lower for aa in ans_lower):
-                    if check_ans_in_doc:
-                        raise ValueError((data["document"].split()[max_doc_len:], ans_raw))
-                    else:
-                        print "answer not in doc %s" % ii
-                        continue
+                coref = json.loads(chains)[:max_chains-1]
+                if not any(aa in doc_raw for aa in ans_raw.split()):
+                    print "answer not in doc %s" % ii
+                    continue
 
-                # stats
-                if len(qry_raw) > max_qry_len: max_qry_len = len(qry_raw)
-                if len(cand_raw) > max_cands: max_cands = len(cand_raw)
-                if len(corefs) > max_ents: max_ents = len(corefs)
+                questions.append(self.process_question(doc_raw, qry_raw, ans_raw, 
+                    cand_raw, w_dict, c_dict, use_chars, ii) + (coref,ii))
 
-                questions.append(
-                    self.process_question(doc_raw, doc_lower, qry_raw, qry_lower,
-                                          ans_raw, ans_lower, cand_raw, cand_lower,
-                                          w_dict, c_dict, use_chars, ii, num_unks,
-                                          max_word_len, wrapqry=False) +
-                    (corefs, mentions, annotations, ii))
-        print("retained %d out of %d questions" % (len(questions), ni + 1))
-        print("maximum query length = %d" % max_qry_len)
-        print("maximum number of candidates = %d" % max_cands)
-        print("maximum number of tracked entities = %d" % max_ents)
+        return questions
+
+    def parse_all_files(self, directory, dictionary, use_chars, max_chains):
+        """
+        parse all files under the given directory into a list of questions,
+        where each element is in the form of (document, query, answer, filename)
+        """
+        basedir = directory.rsplit('/',1)[0]
+        stops = open('utils/shortlist-stopwords.txt').read().splitlines()
+        questions = self.parse_data_file(directory+'.data', 
+                directory+'.coref_onehot',
+                dictionary, use_chars, stops, max_chains)
         return questions

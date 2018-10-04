@@ -5,31 +5,22 @@ def glorot(d1,d2):
     return np.sqrt(6./(d1+d2))
 
 class GRU(object):
-    def __init__(self, idim, odim, layername, reverse=False, reuse=False):
+    def __init__(self, idim, odim, name, reverse=False):
         def _gate_params(insize, outsize, name):
             gate = {}
-            gate["W"] = tf.get_variable(
-                "W"+name,
-                initializer=tf.random_normal(
-                    (insize,outsize), 
-                    mean=0.0, stddev=glorot(insize,outsize)),
-                dtype=tf.float32)
-            gate["U"] = tf.get_variable(
-                "U"+name,
-                initializer=tf.random_normal(
-                    (outsize,outsize),
-                    mean=0.0, stddev=glorot(outsize,outsize)),
-                dtype=tf.float32)
-            gate["b"] = tf.get_variable(
-                "b"+name,
-                initializer=tf.zeros((outsize,)),
-                dtype=tf.float32)
+            gate["W"] = tf.Variable(tf.random_normal((insize,outsize), 
+                mean=0.0, stddev=glorot(insize,outsize)),
+                name="W"+name, dtype=tf.float32)
+            gate["U"] = tf.Variable(tf.random_normal((outsize,outsize), 
+                mean=0.0, stddev=glorot(outsize,outsize)),
+                name="U"+name, dtype=tf.float32)
+            gate["b"] = tf.Variable(tf.zeros((outsize,)), 
+                name="U"+name, dtype=tf.float32)
             return gate
 
-        with tf.variable_scope(layername, reuse=reuse):
-            self.resetgate = _gate_params(idim, odim, "r")
-            self.updategate = _gate_params(idim, odim, "u")
-            self.hiddengate = _gate_params(idim, odim, "h")
+        self.resetgate = _gate_params(idim, odim, "r"+name)
+        self.updategate = _gate_params(idim, odim, "r"+name)
+        self.hiddengate = _gate_params(idim, odim, "r"+name)
         self.Wstacked = tf.concat([self.resetgate["W"], self.updategate["W"],
                 self.hiddengate["W"]], axis=1) # Din x 3Dout
         self.Ustacked = tf.concat([self.resetgate["U"], self.updategate["U"],
@@ -129,6 +120,7 @@ class CorefGRU(object):
             instead of an attention mechanism.
     """
 
+
     def __init__(self, num_relations, input_dim, relation_dim, max_chains, 
             reverse=False, concat=False):
         self.num_relations = num_relations
@@ -166,10 +158,6 @@ class CorefGRU(object):
             self.Watt = tf.Variable(tf.random_normal((self.num_relations,self.input_dim),
                 mean=0.0, stddev=0.1),
                 name="Watt", dtype=tf.float32) # Dr x Din
-
-        # initialize initial memory state
-        self.mem_init = tf.zeros((self.max_chains, self.rdims),
-                                 dtype=tf.float32)
 
     def compute(self, X, M, Ei, Eo, Ri, Ro, init=None, mem_init=None):
         """Apply Coref-GRU layer to the given tensors.
@@ -240,9 +228,8 @@ class CorefGRU(object):
         # update
         if init is None: init = tf.zeros((tf.shape(X)[0], self.output_dim), 
                 dtype=tf.float32)
-        if mem_init is None:
-            mem_init = tf.tile(tf.expand_dims(self.mem_init, axis=0),
-                               (tf.shape(X)[0], 1, 1))
+        if mem_init is None: mem_init = tf.zeros(
+                (tf.shape(X)[0], self.max_chains, self.rdims), dtype=tf.float32)
         agg_init = tf.zeros((tf.shape(X)[0], self.num_relations),
                 dtype = tf.float32)
         outs, mems, aggs = tf.scan(self._step, (Xre, Xpre, Mre, Eire, Eore, Rire, Rore), 
