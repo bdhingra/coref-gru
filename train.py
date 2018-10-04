@@ -152,14 +152,29 @@ def main(save_path, params, mode='train'):
     # test
     mode = 'test' if mode in ['train','test'] else 'val'
     print("testing ...")
-    saves = pkl.load(open('%s/checkpoints.p'%save_path))
+    try:
+        saves = pkl.load(open('%s/checkpoints.p'%save_path))
+    except IOError:
+        def _to_num(foo):
+            try: num = int(foo)
+            except ValueError: return None
+            return num
+
+        saves = []
+        for directory in os.listdir(save_path):
+            if not os.path.isdir(os.path.join(save_path, directory)): continue
+            num = _to_num(directory)
+            if num is None: continue
+            saves.append(num)
+
+        saves = sorted(saves)
     if not saves:
         print("No models saved during training!")
         return
 
     m.load_model('%s/best_model.p'%save_path, saves[-1])
 
-    fids = [], []
+    fids = []
     total_loss, total_acc, n = 0., 0., 0
     answer = np.zeros((len(batch_loader_test.questions),)).astype('float32')
     preds = np.zeros((len(batch_loader_test.questions),)).astype('float32')
