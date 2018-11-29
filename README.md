@@ -14,7 +14,7 @@ The model architectures and preprocessing details are slightly different for the
 
 ## Data and Pretrained Models
 
-1. Download the pre-processed data with coreference annotations for both datasets from [here](http://curtis.ml.cmu.edu/datasets/coref-gru/datasets).
+1. Download the pre-processed data with coreference annotations for both datasets from [here](http://curtis.ml.cmu.edu/datasets/coref-gru/datasets). To preprocess some other data, you can follow the steps in this [Codalab bundle](https://worksheets.codalab.org/bundles/0xa32632e302a24e05821fd021055e5f79/) which was used for official evaluation on WikiHop.
 2. Extract the tar archives into separate folders and create symbolic links to these locations. On Unix this can be done by `ln -s <path_to_lambada_directory> lambada` and `ln -s <path_to_wikihop_directory> wikihop`.
 3. Download the pre-processed Glove embeddings from [here](http://curtis.ml.cmu.edu/datasets/preprocessed_glove/) and create a symbolic link to this as well: `ln -s <path_to_glove_file> glove`.
 
